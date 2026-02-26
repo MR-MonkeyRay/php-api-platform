@@ -1,0 +1,36 @@
+# Composer
+/vendor/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# PHPUnit
+/phpunit.xml
+/.phpunit.result.cache
+/.phpunit.cache/
+
+# Static analysis / tooling caches
+/.phpstan.cache/
+/.psalm.cache/
+
+# Runtime artifacts
+/storage/logs/
+/storage/cache/
+/storage/tmp/
+/storage/*.sqlite
+/storage/*.sqlite3
+/storage/*.db
+
+# IDE / editor
+/.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local tooling
+/.claude/
