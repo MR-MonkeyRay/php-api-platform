@@ -1,0 +1,73 @@
+name: Database Matrix
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+
+jobs:
+  database-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        database: [sqlite, mysql, pgsql]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Start Services
+        run: docker compose up -d --build app mysql pgsql
+
+      - name: Wait For Dependencies
+        run: |
+          set -e
+          if [ "${{ matrix.database }}" = "mysql" ]; then
+            for i in $(seq 1 60); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q mysql)")
+              if [ "$status" = "healthy" ]; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "MySQL not healthy in time" >&2
+            exit 1
+          fi
+
+          if [ "${{ matrix.database }}" = "pgsql" ]; then
+            for i in $(seq 1 60); do
+              status=$(docker inspect --format='{{.State.Health.Status}}' "$(docker compose ps -q pgsql)")
+              if [ "$status" = "healthy" ]; then
+                exit 0
+              fi
+              sleep 2
+            done
+            echo "PostgreSQL not healthy in time" >&2
+            exit 1
+          fi
+
+      - name: Run Matrix Tests
+        run: |
+          set -e
+          if [ "${{ matrix.database }}" = "sqlite" ]; then
+            docker compose exec -T app php vendor/bin/phpunit --testsuite Database-SQLite
+            exit 0
+          fi
+
+          if [ "${{ matrix.database }}" = "mysql" ]; then
+            docker compose exec -T app sh -lc 'TEST_DB_MYSQL_ENABLED=1 TEST_DB_MYSQL_HOST=mysql TEST_DB_MYSQL_PORT=3306 php vendor/bin/phpunit --testsuite Database-MySQL'
+            exit 0
+          fi
+
+          if [ "${{ matrix.database }}" = "pgsql" ]; then
+            docker compose exec -T app sh -lc 'TEST_DB_PGSQL_ENABLED=1 TEST_DB_PGSQL_HOST=pgsql TEST_DB_PGSQL_PORT=5432 php vendor/bin/phpunit --testsuite Database-PgSQL'
+            exit 0
+          fi
+
+          echo "Unknown matrix.database=${{ matrix.database }}" >&2
+          exit 1
+
+      - name: Stop Services
+        if: always()
+        run: docker compose down -v
