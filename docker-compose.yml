@@ -22,6 +22,10 @@ services:
       DB_USER: ${DB_USER:-app}
       DB_PASSWORD: ${DB_PASSWORD:-app}
       DB_CHARSET: ${DB_CHARSET:-utf8mb4}
+      API_KEY_PEPPER: ${API_KEY_PEPPER:-change-this-to-a-strong-secret}
+      API_KEY_CACHE_TTL: ${API_KEY_CACHE_TTL:-30}
+      API_KEY_VERSION_FILE: ${API_KEY_VERSION_FILE:-var/apikey.version}
+      POLICY_DIR: ${POLICY_DIR:-var/policy}
     volumes:
       - ./:/var/www/html
     working_dir: /var/www/html
