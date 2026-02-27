@@ -34,3 +34,5 @@ Thumbs.db
 
 # Local tooling
 /.claude/
+.omx/
+docs/plans/

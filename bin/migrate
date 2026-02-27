@@ -1,0 +1,97 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use App\Core\Config\Config;
+use App\Core\Database\ConnectionFactory;
+use App\Core\Database\Migration\MigrationRunner;
+
+require_once dirname(__DIR__) . '/vendor/autoload.php';
+
+$configPath = dirname(__DIR__) . '/config/database.php';
+$configData = [];
+
+if (is_file($configPath)) {
+    $loaded = require $configPath;
+    if (is_array($loaded)) {
+        $configData = $loaded;
+    }
+}
+
+$databaseFromEnv = [
+    'type' => getenv('DB_CONNECTION') ?: 'sqlite',
+    'path' => getenv('DB_PATH') ?: 'var/database/app.sqlite',
+    'host' => getenv('DB_HOST') ?: '127.0.0.1',
+    'port' => getenv('DB_PORT') ?: null,
+    'name' => getenv('DB_NAME') ?: '',
+    'user' => getenv('DB_USER') ?: '',
+    'password' => getenv('DB_PASSWORD') ?: '',
+    'charset' => getenv('DB_CHARSET') ?: 'utf8mb4',
+];
+
+$databaseConfig = $configData['database'] ?? $configData;
+if (!is_array($databaseConfig)) {
+    $databaseConfig = [];
+}
+
+$databaseConfig = array_filter(
+    array_merge($databaseConfig, array_filter($databaseFromEnv, static fn (mixed $value): bool => $value !== null)),
+    static fn (mixed $value): bool => $value !== null,
+);
+
+$cliDriver = null;
+$dryRun = false;
+
+foreach ($argv as $arg) {
+    if ($arg === '--dry-run') {
+        $dryRun = true;
+        continue;
+    }
+
+    if (str_starts_with($arg, '--driver=')) {
+        $cliDriver = substr($arg, strlen('--driver='));
+        continue;
+    }
+}
+
+if (is_string($cliDriver) && $cliDriver !== '') {
+    $databaseConfig['type'] = $cliDriver;
+}
+
+$driver = (string) ($databaseConfig['type'] ?? 'sqlite');
+$config = new Config(['database' => $databaseConfig]);
+
+try {
+    $factory = new ConnectionFactory($config);
+    $pdo = $factory->create();
+
+    $runner = new MigrationRunner(
+        $pdo,
+        $driver,
+        dirname(__DIR__) . '/migrations',
+    );
+
+    $result = $runner->run($dryRun);
+
+    $mode = $dryRun ? 'DRY-RUN' : 'APPLY';
+    fwrite(
+        STDOUT,
+        sprintf(
+            "[%s] driver=%s executed=%d skipped=%d\n",
+            $mode,
+            $driver,
+            count($result['executed']),
+            count($result['skipped']),
+        ),
+    );
+
+    foreach ($result['executed'] as $version) {
+        fwrite(STDOUT, sprintf("  - %s\n", $version));
+    }
+
+    exit(0);
+} catch (Throwable $throwable) {
+    fwrite(STDERR, sprintf("Migration failed: %s\n", $throwable->getMessage()));
+    exit(1);
+}
