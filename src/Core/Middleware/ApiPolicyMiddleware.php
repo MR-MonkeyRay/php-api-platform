@@ -25,13 +25,13 @@ final class ApiPolicyMiddleware
 
     public function __invoke(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
+        if (!$this->requiresPolicy($request)) {
+            return $handler->handle($request);
+        }
+
         $apiId = $this->resolveApiId($request);
         if ($apiId === null) {
-            if ($this->requiresPolicy($request)) {
-                throw new ApiError(ErrorCode::ROUTE_NOT_FOUND, 404, 'Route not found');
-            }
-
-            return $handler->handle($request);
+            throw new ApiError(ErrorCode::ROUTE_NOT_FOUND, 404, 'Route not found');
         }
 
         $policy = $this->policyProvider->getPolicy($apiId);
@@ -79,6 +79,14 @@ final class ApiPolicyMiddleware
     private function requiresPolicy(ServerRequestInterface $request): bool
     {
         $path = strtolower($request->getUri()->getPath());
+
+        if ($path === '/admin/system'
+            || $path === '/admin/system/info'
+            || $path === '/admin/system/health'
+            || str_starts_with($path, '/admin/system/')
+        ) {
+            return false;
+        }
 
         return $path === '/api'
             || $path === '/admin'

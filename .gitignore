@@ -36,3 +36,9 @@ Thumbs.db
 /.claude/
 .omx/
 docs/plans/
+# Runtime var artifacts
+/var/audit/
+/var/database/
+/var/policy/
+/var/*.sqlite
+/var/*.sqlite3

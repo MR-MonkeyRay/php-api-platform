@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Core\Controller;
 
+use App\Core\Audit\AuditLogger;
 use App\Core\Error\ApiError;
 use App\Core\Error\ErrorCode;
 use App\Core\Policy\SnapshotBuilder;
@@ -14,6 +15,8 @@ use Psr\Http\Message\ServerRequestInterface;
 
 final class ApiPolicyController
 {
+    private ?AuditLogger $auditLogger = null;
+
     public function __construct(
         private readonly ApiPolicyRepository $repository,
         private readonly SnapshotBuilder $snapshotBuilder,
@@ -65,6 +68,16 @@ final class ApiPolicyController
 
         $this->writeAuditLog($request, $apiId, $payload, $existing === null ? 'create' : 'update');
 
+        $this->writeFileAuditLog(
+            $request,
+            'policy.upsert',
+            [
+                'api_id' => $apiId,
+                'operation' => $existing === null ? 'create' : 'update',
+                'payload' => $payload,
+            ],
+        );
+
         return $this->json($response, ['data' => $saved], $existing === null ? 201 : 200);
     }
 
@@ -94,10 +107,7 @@ final class ApiPolicyController
     {
         $this->ensureAuditTableExists();
 
-        $actor = trim($request->getHeaderLine('X-Admin-User'));
-        if ($actor === '') {
-            $actor = 'system';
-        }
+        $actor = $this->resolveActor($request);
 
         $statement = $this->pdo->prepare(
             <<<'SQL'
@@ -113,6 +123,54 @@ final class ApiPolicyController
             'target_id' => $apiId,
             'details' => (string) json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
         ]);
+    }
+
+    /**
+     * @param array<string, mixed> $details
+     */
+    private function writeFileAuditLog(ServerRequestInterface $request, string $action, array $details): void
+    {
+        $this->resolveAuditLogger()->log(
+            $action,
+            $this->resolveActor($request),
+            $details,
+            $this->resolveIp($request),
+        );
+    }
+
+    private function resolveActor(ServerRequestInterface $request): string
+    {
+        $actor = trim($request->getHeaderLine('X-Admin-User'));
+
+        return $actor === '' ? 'system' : $actor;
+    }
+
+    private function resolveIp(ServerRequestInterface $request): string
+    {
+        $forwardedFor = trim($request->getHeaderLine('X-Forwarded-For'));
+        if ($forwardedFor !== '') {
+            $parts = explode(',', $forwardedFor);
+            $firstIp = trim((string) ($parts[0] ?? ''));
+            if ($firstIp !== '') {
+                return $firstIp;
+            }
+        }
+
+        $serverParams = $request->getServerParams();
+        $remoteAddress = trim((string) ($serverParams['REMOTE_ADDR'] ?? ''));
+
+        return $remoteAddress === '' ? 'unknown' : $remoteAddress;
+    }
+
+    private function resolveAuditLogger(): AuditLogger
+    {
+        if ($this->auditLogger instanceof AuditLogger) {
+            return $this->auditLogger;
+        }
+
+        $this->auditLogger = AuditLogger::fromEnvironment();
+
+        return $this->auditLogger;
     }
 
     private function ensureAuditTableExists(): void

@@ -9,9 +9,12 @@ use App\Core\ApiKey\ApiKeyProvider;
 use App\Core\Config\Config;
 use App\Core\Controller\ApiKeyController;
 use App\Core\Controller\HealthController;
+use App\Core\Controller\SystemController;
 use App\Core\Database\ConnectionFactory;
+use App\Core\Database\Migration\MigrationRunner;
 use App\Core\Error\ErrorHandler;
 use App\Core\Logger\LoggerFactory;
+use App\Core\Middleware\AdminAuthMiddleware;
 use App\Core\Middleware\ApiPolicyMiddleware;
 use App\Core\Middleware\AuthenticationMiddleware;
 use App\Core\Middleware\AuthorizationMiddleware;
@@ -19,6 +22,7 @@ use App\Core\Middleware\SecurityMiddlewareRegistrar;
 use App\Core\Middleware\TraceContextMiddleware;
 use App\Core\Policy\PolicyProvider;
 use App\Core\Repository\ApiKeyRepository;
+use App\Core\Setup\SetupDetector;
 use DI\ContainerBuilder;
 use Psr\Log\LoggerInterface;
 use Slim\App;
@@ -28,31 +32,42 @@ final class ApplicationFactory
 {
     public static function create(bool $displayErrorDetails = false): App
     {
+        $readEnv = static function (string $key, string $default = ''): string {
+            $value = $_ENV[$key] ?? getenv($key);
+            if (!is_string($value) || $value === '') {
+                return $default;
+            }
+
+            return $value;
+        };
+
+        $dbConnection = strtolower(trim($readEnv('DB_CONNECTION', $readEnv('DB_TYPE', 'sqlite'))));
+
         $config = new Config([
             'app' => [
-                'name' => $_ENV['APP_NAME'] ?? 'php-api-platform',
-                'env' => $_ENV['APP_ENV'] ?? 'test',
+                'name' => $readEnv('APP_NAME', 'php-api-platform'),
+                'env' => $readEnv('APP_ENV', 'test'),
                 'debug' => $displayErrorDetails,
             ],
             'log' => [
-                'level' => $_ENV['LOG_LEVEL'] ?? 'debug',
+                'level' => $readEnv('LOG_LEVEL', 'debug'),
             ],
             'database' => [
-                'type' => $_ENV['DB_CONNECTION'] ?? 'sqlite',
-                'path' => $_ENV['DB_PATH'] ?? ':memory:',
-                'host' => $_ENV['DB_HOST'] ?? '127.0.0.1',
-                'port' => (int) ($_ENV['DB_PORT'] ?? 3306),
-                'name' => $_ENV['DB_NAME'] ?? 'app',
-                'user' => $_ENV['DB_USER'] ?? 'app',
-                'password' => $_ENV['DB_PASSWORD'] ?? 'app',
-                'charset' => $_ENV['DB_CHARSET'] ?? 'utf8mb4',
+                'type' => $dbConnection,
+                'path' => $readEnv('DB_PATH', ':memory:'),
+                'host' => $readEnv('DB_HOST', '127.0.0.1'),
+                'port' => (int) $readEnv('DB_PORT', '3306'),
+                'name' => $readEnv('DB_NAME', 'app'),
+                'user' => $readEnv('DB_USER', 'app'),
+                'password' => $readEnv('DB_PASSWORD', 'app'),
+                'charset' => $readEnv('DB_CHARSET', 'utf8mb4'),
             ],
             'policy' => [
-                'dir' => $_ENV['POLICY_DIR'] ?? 'var/policy',
+                'dir' => $readEnv('POLICY_DIR', 'var/policy'),
             ],
             'api_key' => [
-                'version_file' => $_ENV['API_KEY_VERSION_FILE'] ?? 'var/apikey.version',
-                'cache_ttl' => (int) ($_ENV['API_KEY_CACHE_TTL'] ?? 30),
+                'version_file' => $readEnv('API_KEY_VERSION_FILE', 'var/apikey.version'),
+                'cache_ttl' => (int) $readEnv('API_KEY_CACHE_TTL', '30'),
             ],
         ]);
 
@@ -71,9 +86,47 @@ final class ApplicationFactory
         AppFactory::setContainer($container);
         $app = AppFactory::create();
 
-        $pepper = trim((string) ($_ENV['API_KEY_PEPPER'] ?? getenv('API_KEY_PEPPER') ?: ''));
+        $connectionFactory = $container->get(ConnectionFactory::class);
+        $setupDetector = new SetupDetector($readEnv('SETUP_VAR_DIR', 'var'));
+
+        $hasEnvFirstSetupConfig = static function () use ($dbConnection, $readEnv): bool {
+            $adminUsername = trim($readEnv('ADMIN_USERNAME'));
+            $adminPasswordHash = trim($readEnv('ADMIN_PASSWORD_HASH'));
+            if ($adminUsername === '' || $adminPasswordHash === '') {
+                return false;
+            }
+
+            if ($dbConnection === 'sqlite') {
+                return trim($readEnv('DB_PATH', ':memory:')) !== '';
+            }
+
+            if ($dbConnection === 'mysql' || $dbConnection === 'pgsql') {
+                return trim($readEnv('DB_HOST')) !== ''
+                    && trim($readEnv('DB_NAME')) !== ''
+                    && trim($readEnv('DB_USER')) !== '';
+            }
+
+            return false;
+        };
+
+        if (!$setupDetector->isInstalled() && $hasEnvFirstSetupConfig()) {
+            try {
+                $setupPdo = $connectionFactory->create();
+                $runner = new MigrationRunner(
+                    $setupPdo,
+                    (string) $config->get('database.type', 'sqlite'),
+                    dirname(__DIR__, 2) . '/migrations',
+                );
+                $runner->run();
+                $setupDetector->markInstalled();
+            } catch (\Throwable) {
+                // 测试工厂中 setup 失败不阻断，用于兼容仅单元级场景。
+            }
+        }
+
+        $pepper = trim((string) ($readEnv('API_KEY_PEPPER')));
         if ($pepper !== '') {
-            $pdo = $container->get(ConnectionFactory::class)->create();
+            $pdo = $connectionFactory->create();
             $policyProvider = new PolicyProvider((string) $config->get('policy.dir', 'var/policy'));
             $apiKeyProvider = new ApiKeyProvider(
                 $pdo,
@@ -85,6 +138,12 @@ final class ApplicationFactory
             $apiPolicyMiddleware = new ApiPolicyMiddleware($policyProvider);
             $authenticationMiddleware = new AuthenticationMiddleware($apiKeyProvider);
             $authorizationMiddleware = new AuthorizationMiddleware();
+            $adminAuthMiddleware = new AdminAuthMiddleware();
+            $systemController = new SystemController(
+                $pdo,
+                (string) $config->get('policy.dir', 'var/policy'),
+                $readEnv('PLUGINS_DIR', 'plugins'),
+            );
 
             SecurityMiddlewareRegistrar::register(
                 $app,
@@ -92,6 +151,8 @@ final class ApplicationFactory
                 $authenticationMiddleware,
                 $authorizationMiddleware,
             );
+
+            $app->add($adminAuthMiddleware);
 
             $apiKeyController = new ApiKeyController(
                 new ApiKeyRepository($pdo),
@@ -101,6 +162,8 @@ final class ApplicationFactory
                 $pepper,
             );
 
+            $app->get('/admin/system/health', [$systemController, 'health'])->setName('admin:system:health');
+            $app->get('/admin/system/info', [$systemController, 'info'])->setName('admin:system:info');
             $app->post('/admin/api-keys', [$apiKeyController, 'create'])->setName('admin:api-keys:create');
             $app->get('/admin/api-keys', [$apiKeyController, 'list'])->setName('admin:api-keys:list');
             $app->get('/admin/api-keys/{kid}', [$apiKeyController, 'get'])->setName('admin:api-keys:get');

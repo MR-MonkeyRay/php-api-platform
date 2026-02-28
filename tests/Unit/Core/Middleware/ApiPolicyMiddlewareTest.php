@@ -130,6 +130,18 @@ final class ApiPolicyMiddlewareTest extends TestCase
         self::assertSame(200, $response->getStatusCode());
     }
 
+    public function testAdminSystemPathBypassesPolicyRequirement(): void
+    {
+        $this->writeSnapshot([]);
+
+        $middleware = new ApiPolicyMiddleware(new PolicyProvider($this->policyDir));
+        $request = (new ServerRequestFactory())->createServerRequest('GET', '/admin/system/health');
+
+        $response = $middleware($request, $this->handler);
+
+        self::assertSame(200, $response->getStatusCode());
+    }
+
     public function testRouteNameUsedAsApiIdWhenRequestAttributeMissing(): void
     {
         $this->writeSnapshot([

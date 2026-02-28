@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Core\Controller;
 
+use App\Core\Audit\AuditLogger;
 use App\Core\ApiKey\ApiKeyGenerator;
 use App\Core\ApiKey\ApiKeyProvider;
 use App\Core\Error\ApiError;
@@ -15,6 +16,8 @@ use Psr\Http\Message\ServerRequestInterface;
 
 final class ApiKeyController
 {
+    private ?AuditLogger $auditLogger = null;
+
     public function __construct(
         private readonly ApiKeyRepository $repository,
         private readonly ApiKeyProvider $provider,
@@ -89,6 +92,17 @@ final class ApiKeyController
             ],
         );
 
+        $this->writeFileAuditLog(
+            $request,
+            'api_key.create',
+            [
+                'kid' => $kid,
+                'scopes' => $scopes,
+                'description' => $description,
+                'expires_at' => $expiresAt,
+            ],
+        );
+
         $data = $this->sanitizeApiKey($saved);
         $data['secret'] = $secret;
 
@@ -116,6 +130,12 @@ final class ApiKeyController
             $request,
             'revoke',
             $kid,
+            ['kid' => $kid],
+        );
+
+        $this->writeFileAuditLog(
+            $request,
+            'api_key.revoke',
             ['kid' => $kid],
         );
 
@@ -188,10 +208,7 @@ final class ApiKeyController
     {
         $this->ensureAuditTableExists();
 
-        $actor = trim($request->getHeaderLine('X-Admin-User'));
-        if ($actor === '') {
-            $actor = 'system';
-        }
+        $actor = $this->resolveActor($request);
 
         $statement = $this->pdo->prepare(
             <<<'SQL'
@@ -207,6 +224,54 @@ final class ApiKeyController
             'target_id' => $kid,
             'details' => (string) json_encode($details, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
         ]);
+    }
+
+    /**
+     * @param array<string, mixed> $details
+     */
+    private function writeFileAuditLog(ServerRequestInterface $request, string $action, array $details): void
+    {
+        $this->resolveAuditLogger()->log(
+            $action,
+            $this->resolveActor($request),
+            $details,
+            $this->resolveIp($request),
+        );
+    }
+
+    private function resolveActor(ServerRequestInterface $request): string
+    {
+        $actor = trim($request->getHeaderLine('X-Admin-User'));
+
+        return $actor === '' ? 'system' : $actor;
+    }
+
+    private function resolveIp(ServerRequestInterface $request): string
+    {
+        $forwardedFor = trim($request->getHeaderLine('X-Forwarded-For'));
+        if ($forwardedFor !== '') {
+            $parts = explode(',', $forwardedFor);
+            $firstIp = trim((string) ($parts[0] ?? ''));
+            if ($firstIp !== '') {
+                return $firstIp;
+            }
+        }
+
+        $serverParams = $request->getServerParams();
+        $remoteAddress = trim((string) ($serverParams['REMOTE_ADDR'] ?? ''));
+
+        return $remoteAddress === '' ? 'unknown' : $remoteAddress;
+    }
+
+    private function resolveAuditLogger(): AuditLogger
+    {
+        if ($this->auditLogger instanceof AuditLogger) {
+            return $this->auditLogger;
+        }
+
+        $this->auditLogger = AuditLogger::fromEnvironment();
+
+        return $this->auditLogger;
     }
 
     private function ensureAuditTableExists(): void
