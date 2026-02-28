@@ -1,0 +1,6 @@
+{
+  "id": "audit",
+  "name": "Audit Plugin",
+  "version": "1.0.0",
+  "mainClass": "AuditPlugin"
+}

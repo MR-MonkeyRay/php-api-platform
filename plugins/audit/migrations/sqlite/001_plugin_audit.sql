@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS plugin_audit_event (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    level TEXT NOT NULL,
+    message TEXT NOT NULL,
+    context TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

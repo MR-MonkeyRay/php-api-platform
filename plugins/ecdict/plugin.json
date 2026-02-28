@@ -1,0 +1,6 @@
+{
+  "id": "ecdict",
+  "name": "ECDICT Plugin",
+  "version": "1.0.0",
+  "mainClass": "EcdictPlugin"
+}

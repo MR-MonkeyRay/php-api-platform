@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS plugin_ecdict_entry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    word TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    phonetic TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

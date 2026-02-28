@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS plugin_audit_event (
+    id BIGSERIAL PRIMARY KEY,
+    level VARCHAR(32) NOT NULL,
+    message TEXT NOT NULL,
+    context JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
